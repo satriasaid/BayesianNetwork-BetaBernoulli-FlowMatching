@@ -1,0 +1,61 @@
+{
+  "source": "Google Quick, Draw! numpy_bitmap (CC BY 4.0, Google Creative Lab)",
+  "url_pattern": "https://storage.googleapis.com/quickdraw_dataset/full/numpy_bitmap/<category>.npy",
+  "image_size": 28,
+  "split_seed": 20260910,
+  "train_fraction": 0.8,
+  "filter": {
+    "rule": "keep drawings with ink fraction in range",
+    "ink_min_fraction": 0.05,
+    "ink_max_fraction": 0.55
+  },
+  "categories": [
+    {
+      "name": "cat",
+      "label": 0,
+      "file": "cat.npy",
+      "sha256": "21a281839d3f2eef601d57d2338a4eafdf24649f8d0a0e42d3ec3e595911463e",
+      "drawings_available_in_file": 123202,
+      "candidates_drawn": 6900,
+      "rejected_by_ink_filter": 3,
+      "original_drawings_used": 4000,
+      "n_train_original": 3200,
+      "n_eval_original": 800,
+      "train_indices_sha256": "6d830b777821f5504aeca4e97984ea59e92fcf8c3b5faffcc7c8dd0e0a884a32",
+      "eval_indices_sha256": "616119709a5c97fdd764a43d0816981f52d34fd56d2bd05a6bf2835b607a41ac"
+    },
+    {
+      "name": "dog",
+      "label": 1,
+      "file": "dog.npy",
+      "sha256": "72f95508d440976a075e7098557647bbdeaea7a06c63889215c5b87fbf82ea2c",
+      "drawings_available_in_file": 152159,
+      "candidates_drawn": 6900,
+      "rejected_by_ink_filter": 3,
+      "original_drawings_used": 4000,
+      "n_train_original": 3200,
+      "n_eval_original": 800,
+      "train_indices_sha256": "980de0aab1802b527086d31b01e2c44d8202148be708f2cd50d27888260efa64",
+      "eval_indices_sha256": "23010a7b2331cbfd70579dbe7a36134e2e99d37794f3c36c1a857c59e3201aff"
+    },
+    {
+      "name": "fish",
+      "label": 2,
+      "file": "fish.npy",
+      "sha256": "7ed4f4ce04546a0935149780c73fdd3c376d121e7df5ac1307586a78769e5fc9",
+      "drawings_available_in_file": 134150,
+      "candidates_drawn": 6900,
+      "rejected_by_ink_filter": 2,
+      "original_drawings_used": 4000,
+      "n_train_original": 3200,
+      "n_eval_original": 800,
+      "train_indices_sha256": "33809855cd14bf5fd12d38228c10ea47b816073f96b286dc27971fe32669025b",
+      "eval_indices_sha256": "c8d21001746c2f6ad3f9101bbeafb40fa55a202d59479e94785fe73ccbc89347"
+    }
+  ],
+  "totals": {
+    "n_train_original": 9600,
+    "n_eval_original": 2400,
+    "n_categories": 3
+  }
+}

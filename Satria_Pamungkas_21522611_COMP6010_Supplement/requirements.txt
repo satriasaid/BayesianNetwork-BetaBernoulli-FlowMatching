@@ -1,0 +1,10 @@
+# Minimum versions used for this submission (see requirements_frozen.txt for the exact
+# environment). Any recent 2.x numpy / 2.x torch combination should work.
+numpy>=2.0
+scipy>=1.13
+pandas>=2.0
+matplotlib>=3.8
+torch>=2.4          # CUDA build recommended; CPU works but Part C is much slower
+tabulate>=0.9       # used by pandas .to_markdown() when saving result tables
+jupyter>=1.0
+nbconvert>=7.0

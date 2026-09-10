@@ -1,0 +1,4 @@
+name,drawings_available_in_file,candidates_drawn,rejected_by_ink_filter,original_drawings_used,n_train_original,n_eval_original
+cat,123202,6900,3,4000,3200,800
+dog,152159,6900,3,4000,3200,800
+fish,134150,6900,2,4000,3200,800

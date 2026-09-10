@@ -1,0 +1,698 @@
+#%% md
+# COMP6010 Assignment — Part B: Bayesian Learning with a Beta Prior
+
+**Student:** Satria Pamungkas &nbsp;|&nbsp; **Student ID:** 21522611
+
+**Scenario — a fruit-picking robot.** A robot uses a soft gripper to pick fruit without dropping or
+damaging it. Let $\theta$ be its unknown success probability. Attempt $i$ has $X_i = 1$ on success
+and $X_i = 0$ otherwise, and attempts are conditionally independent given a fixed $\theta$. The
+robot settings and evaluation conditions are assumed unchanged across the three batches.
+
+Initial prior: $\theta \sim \mathrm{Beta}(2,3)$. The observations below are the hypothetical values
+supplied in the brief; **each row is new attempts, not cumulative counts.**
+
+| Batch | Attempts | Successes | Failures |
+|---|---|---|---|
+| 1 | 10 | 6 | 4 |
+| 2 | 20 | 16 | 4 |
+| 3 | 70 | 63 | 7 |
+
+**Contents.** B1 formulation · B2 posterior updating · B3 uncertainty and decision · B4 prior
+sensitivity.
+
+#%% code
+import numpy as np
+import pandas as pd
+from scipy import stats, integrate
+import matplotlib.pyplot as plt
+import json, os, sys, platform
+
+def find_results_dir(part="partB"):
+    here = os.path.abspath(os.getcwd())
+    for cand in (os.path.join(here, "..", "results", part),
+                 os.path.join(here, "results", part)):
+        cand = os.path.abspath(cand)
+        if os.path.isdir(os.path.dirname(cand)):
+            os.makedirs(cand, exist_ok=True)
+            return cand
+    os.makedirs(os.path.join(here, "results", part), exist_ok=True)
+    return os.path.abspath(os.path.join(here, "results", part))
+
+RES = find_results_dir("partB")
+plt.rcParams.update({"figure.dpi": 120, "savefig.dpi": 200, "font.size": 9,
+                     "axes.grid": True, "grid.alpha": 0.3})
+pd.set_option("display.width", 170, "display.precision", 6)
+
+SEED = 20260910                    # stated random seed, reused throughout Part B
+N_DRAWS = 200_000                  # >= 10,000 as required
+
+ALPHA0, BETA0 = 2.0, 3.0           # initial prior Beta(2,3)
+BATCHES = [{"batch": 1, "n": 10, "s": 6,  "f": 4},
+           {"batch": 2, "n": 20, "s": 16, "f": 4},
+           {"batch": 3, "n": 70, "s": 63, "f": 7}]
+THRESHOLD = 0.80
+DECISION_LEVEL = 0.95
+
+for b in BATCHES:
+    assert b["s"] + b["f"] == b["n"], "batch counts inconsistent"
+TOTAL_N = sum(b["n"] for b in BATCHES)
+TOTAL_S = sum(b["s"] for b in BATCHES)
+print(f"pooled data: N = {TOTAL_N} attempts, s = {TOTAL_S} successes, "
+      f"f = {TOTAL_N - TOTAL_S} failures")
+print(f"python {sys.version.split()[0]} | numpy {np.__version__} | scipy {stats.__name__} "
+      f"{__import__('scipy').__version__}")
+print(f"seed = {SEED}, posterior draws = {N_DRAWS:,}")
+
+#%% md
+## B1. Formulate the learning problem  *(2 marks)*
+
+### Why Bernoulli, and why Beta
+
+**Bernoulli for the outcome.** Each grasp attempt has exactly two possible results — the fruit is
+picked cleanly or it is not. The Bernoulli distribution is the unique distribution on
+$\{0,1\}$, with one parameter, so it is the natural likelihood for a single attempt:
+
+$$P(X_i = x \mid \theta) = \theta^{x}(1-\theta)^{1-x}, \qquad x \in \{0,1\}$$
+
+Given $n$ conditionally independent attempts with $s$ successes, the likelihood is a product that
+depends on the data only through $s$ and $n$ (these are *sufficient statistics*):
+
+$$P(\mathcal{D} \mid \theta) = \prod_{i=1}^{n}\theta^{x_i}(1-\theta)^{1-x_i} = \theta^{s}(1-\theta)^{n-s}$$
+
+**Beta for the parameter.** $\theta$ is not an outcome we observe; it is an unknown *continuous*
+quantity in $(0,1)$. A single number cannot express our uncertainty about it, so we place a
+probability density on it. The Beta family is supported exactly on $(0,1)$ — the right support for a
+probability — and is flexible enough to encode anything from complete ignorance to a strong belief:
+
+$$f(\theta) = \frac{\theta^{\alpha-1}(1-\theta)^{\beta-1}}{B(\alpha,\beta)}, \qquad 0 < \theta < 1$$
+
+The decisive property is **conjugacy**: the Beta kernel $\theta^{\alpha-1}(1-\theta)^{\beta-1}$ has
+the same algebraic form as the Bernoulli likelihood $\theta^{s}(1-\theta)^{n-s}$, so multiplying them
+returns another Beta. Updating is therefore exact arithmetic on two numbers, with no numerical
+integration required. $B(\alpha,\beta)$ is only the normalising constant that makes the density
+integrate to one; it does not depend on $\theta$ and never needs to be derived here.
+
+$\alpha$ and $\beta$ are **prior shape parameters, not observed data.** They behave like
+$\alpha - 1$ pseudo-successes and $\beta - 1$ pseudo-failures, which is a useful intuition for
+comparing prior strength against sample size, but they are not counts of anything that happened.
+The initial prior $\mathrm{Beta}(2,3)$ has mean $2/5 = 0.4$ — a mildly pessimistic starting belief
+carrying about as much weight as 3 real attempts.
+
+### Outcome $X_i$ versus parameter $\theta$
+
+| | $X_i$ | $\theta$ |
+|---|---|---|
+| what it is | observed outcome of one attempt | unknown success probability of the robot |
+| type | discrete, $\{0,1\}$ | continuous, $(0,1)$ |
+| described by | probability **mass** $P(X_i = x \mid \theta)$ | probability **density** $f(\theta)$ |
+| how many | one per attempt, 100 in total | one, fixed and shared by all attempts |
+| learned by | it is observed directly | inferred; we only ever get a distribution over it |
+
+A density value is **not** a probability: $f(0.8) = 4.6$ is perfectly legitimate, whereas
+$P(\theta = 0.8) = 0$ exactly, because a continuous variable assigns zero probability to any single
+point. Only *intervals* have probability, which is why B3 asks for $P(\theta > 0.8 \mid \mathcal{D})$
+rather than a density value.
+
+### Graphical model and conditional independence
+
+```
+              θ  ~ Beta(α, β)          θ is a single shared parent
+        ┌─────┼─────┬── ... ──┐
+        ▼     ▼     ▼         ▼
+       X₁    X₂    X₃  ...  X₁₀₀      each Xᵢ | θ ~ Bernoulli(θ)
+```
+
+This is a plate model: $\theta$ is the single parent of every observation, and the observations have
+no edges among themselves. The joint is
+
+$$f(\theta, x_1,\dots,x_n) = f(\theta) \prod_{i=1}^{n} P(x_i \mid \theta)$$
+
+**Conditional independence.** The factorisation says $X_i \perp X_j \mid \theta$ for $i \ne j$:
+*once* $\theta$ is fixed, knowing that attempt 3 succeeded tells us nothing more about attempt 4.
+But the $X_i$ are **not marginally independent.** Integrating $\theta$ out,
+$P(x_1,\dots,x_n) = \int f(\theta)\prod_i P(x_i\mid\theta)\,d\theta$, does not factorise, because
+$\theta$ is a common parent — observing successes shifts our belief about $\theta$, which changes
+what we expect of every future attempt. This is exactly the same collider-free "common cause"
+dependence seen in Part A, and it is what makes learning possible: if the attempts were marginally
+independent, data could not inform us about $\theta$.
+
+#%% code
+# Numerical demonstration: X_i are conditionally independent given theta but NOT marginally so.
+rng = np.random.default_rng(SEED)
+th = rng.beta(ALPHA0, BETA0, 400_000)                     # theta ~ prior
+x1 = (rng.random(400_000) < th).astype(int)               # X1 | theta
+x2 = (rng.random(400_000) < th).astype(int)               # X2 | theta, same theta
+
+print("MARGINAL (theta integrated out):")
+print(f"  P(X1=1)            = {x1.mean():.4f}   (prior mean = {ALPHA0/(ALPHA0+BETA0):.4f})")
+print(f"  P(X2=1)            = {x2.mean():.4f}")
+print(f"  P(X1=1, X2=1)      = {(x1*x2).mean():.4f}")
+print(f"  P(X1=1)P(X2=1)     = {x1.mean()*x2.mean():.4f}   <- differs => NOT independent")
+print(f"  P(X2=1 | X1=1)     = {x2[x1==1].mean():.4f}")
+print(f"  P(X2=1 | X1=0)     = {x2[x1==0].mean():.4f}   <- X1 is informative about X2")
+
+fixed = 0.55
+xa = (rng.random(400_000) < fixed).astype(int)
+xb = (rng.random(400_000) < fixed).astype(int)
+print(f"\nCONDITIONAL on theta = {fixed} (held fixed):")
+print(f"  P(Xb=1 | Xa=1)     = {xb[xa==1].mean():.4f}")
+print(f"  P(Xb=1 | Xa=0)     = {xb[xa==0].mean():.4f}   <- equal => conditionally independent")
+
+#%% md
+## B2. Update and compare estimates  *(3 marks)*
+
+### Deriving the posterior form
+
+Bayes' rule for a continuous parameter (densities, with the marginal likelihood as the constant):
+
+$$f(\theta \mid \mathcal{D}) = \frac{P(\mathcal{D}\mid\theta)\, f(\theta)}{P(\mathcal{D})},
+\qquad P(\mathcal{D}) = \int_0^1 P(\mathcal{D}\mid\theta) f(\theta)\, d\theta$$
+
+Substituting the Bernoulli likelihood and Beta prior, and dropping every factor free of $\theta$
+into the normalising constant:
+
+$$f(\theta\mid\mathcal{D}) \;\propto\; \underbrace{\theta^{s}(1-\theta)^{n-s}}_{\text{likelihood}}
+\cdot \underbrace{\theta^{\alpha-1}(1-\theta)^{\beta-1}}_{\text{prior}}
+\;=\; \theta^{(\alpha+s)-1}(1-\theta)^{(\beta+n-s)-1}$$
+
+The right-hand side is the kernel of a Beta density, so the normalising constant must be
+$B(\alpha+s,\ \beta+n-s)$ and
+
+$$\boxed{\;\theta \mid \mathcal{D} \;\sim\; \mathrm{Beta}(\alpha + s,\ \beta + n - s)\;}$$
+
+Updating is just: add successes to $\alpha$, add failures to $\beta$.
+
+### Why sequential and pooled updating must agree
+
+Using each batch's posterior as the next batch's prior adds $(s_k, f_k)$ at every step, so after
+three batches the parameters are $\alpha_0 + \sum_k s_k$ and $\beta_0 + \sum_k f_k$ — identical to
+updating once with the pooled totals. This is a direct consequence of conditional independence given
+$\theta$: the likelihood factorises across batches, and multiplication is order-independent. If the
+two routes disagreed it would indicate an implementation error (typically re-using the *original*
+prior at each step, or treating the table's rows as cumulative).
+
+### Point estimates
+
+$$\hat\theta_{\mathrm{ML}} = \frac{s}{n}, \qquad
+\mathbb{E}[\theta \mid \mathcal{D}] = \frac{\alpha_n}{\alpha_n + \beta_n}, \qquad
+\hat\theta_{\mathrm{MAP}} = \frac{\alpha_n - 1}{\alpha_n + \beta_n - 2} \;\;(\alpha_n,\beta_n > 1)$$
+
+The MAP formula comes from setting the derivative of the log density to zero; it is the mode, which
+differs from the mean whenever the posterior is skewed.
+
+#%% code
+def beta_update(alpha, beta, s, f):
+    """Conjugate Beta-Bernoulli update: add successes to alpha, failures to beta."""
+    return alpha + s, beta + f
+
+def posterior_summary(alpha, beta, label, n_cum, s_cum):
+    """Point estimates and interval summaries for a Beta(alpha, beta) posterior."""
+    d = stats.beta(alpha, beta)
+    mode = (alpha - 1) / (alpha + beta - 2) if (alpha > 1 and beta > 1) else np.nan
+    lo, hi = d.ppf(0.025), d.ppf(0.975)
+    return {"stage": label, "alpha": alpha, "beta": beta,
+            "cum_attempts": n_cum, "cum_successes": s_cum,
+            "ML (s/n)": (s_cum / n_cum) if n_cum else np.nan,
+            "posterior mean": alpha / (alpha + beta),
+            "MAP (mode)": mode,
+            "posterior sd": d.std(),
+            "95% CI low": lo, "95% CI high": hi, "CI width": hi - lo,
+            "P(theta > 0.8)": d.sf(THRESHOLD)}
+
+# ---------------------------------------------------------------- sequential updating
+rows = [posterior_summary(ALPHA0, BETA0, "prior Beta(2,3)", 0, 0)]
+a, b = ALPHA0, BETA0
+n_cum = s_cum = 0
+seq_params = [(ALPHA0, BETA0)]
+for bt in BATCHES:
+    a, b = beta_update(a, b, bt["s"], bt["f"])
+    n_cum += bt["n"]; s_cum += bt["s"]
+    seq_params.append((a, b))
+    rows.append(posterior_summary(a, b, f"after batch {bt['batch']}", n_cum, s_cum))
+
+seq_df = pd.DataFrame(rows)
+print("SEQUENTIAL UPDATING\n")
+print(seq_df[["stage", "alpha", "beta", "cum_attempts", "cum_successes",
+              "ML (s/n)", "posterior mean", "MAP (mode)", "posterior sd"]].to_string(index=False))
+seq_df.to_csv(os.path.join(RES, "B2_sequential_updates.csv"), index=False)
+
+A_FINAL, B_FINAL = a, b
+POST = stats.beta(A_FINAL, B_FINAL)
+
+#%% code
+# --------------------------------------- check 1: sequential == pooled
+a_pool, b_pool = beta_update(ALPHA0, BETA0, TOTAL_S, TOTAL_N - TOTAL_S)
+print(f"sequential final posterior : Beta({A_FINAL}, {B_FINAL})")
+print(f"pooled-data posterior      : Beta({a_pool}, {b_pool})")
+assert (a_pool, b_pool) == (A_FINAL, B_FINAL), "sequential and pooled updates disagree"
+print("CHECK PASSED: identical, as conjugacy + conditional independence require.")
+print(f"\n  alpha = {ALPHA0} + {TOTAL_S} = {A_FINAL}   "
+      f"beta = {BETA0} + {TOTAL_N - TOTAL_S} = {B_FINAL}")
+
+# --------------------------------------- check 2: closed form == numerical Bayes on a grid
+grid = np.linspace(1e-6, 1 - 1e-6, 200_001)
+log_post = ((ALPHA0 - 1) * np.log(grid) + (BETA0 - 1) * np.log1p(-grid)
+            + TOTAL_S * np.log(grid) + (TOTAL_N - TOTAL_S) * np.log1p(-grid))
+w = np.exp(log_post - log_post.max())
+num_pdf = w / integrate.trapezoid(w, grid)
+closed = POST.pdf(grid)
+print(f"\nmax |numerical grid posterior - closed-form Beta pdf| = "
+      f"{np.abs(num_pdf - closed).max():.3e}")
+print(f"numerical posterior mean = {integrate.trapezoid(grid*num_pdf, grid):.8f}  "
+      f"vs closed form {POST.mean():.8f}")
+print("CHECK PASSED: the conjugate shortcut agrees with brute-force numerical Bayes.")
+
+# --------------------------------------- check 3: order of batches is irrelevant
+import itertools
+orders = set()
+for perm in itertools.permutations(BATCHES):
+    aa, bb = ALPHA0, BETA0
+    for bt in perm:
+        aa, bb = beta_update(aa, bb, bt["s"], bt["f"])
+    orders.add((aa, bb))
+print(f"\ndistinct posteriors over all 6 batch orderings: {orders}  -> order-invariant")
+
+#%% code
+# --------------------------------------- plot prior and all three posteriors
+th = np.linspace(0, 1, 1200)
+labels = ["prior Beta(2,3)", "after batch 1", "after batch 2", "after batch 3 (all data)"]
+colours = ["#7f7f7f", "#4C72B0", "#55A868", "#C44E52"]
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 3.7))
+
+ax = axes[0]
+for (aa, bb), lab, c in zip(seq_params, labels, colours):
+    ax.plot(th, stats.beta(aa, bb).pdf(th), color=c, lw=1.9,
+            label=f"{lab}: Beta({aa:g},{bb:g})")
+    ax.axvline(aa / (aa + bb), color=c, ls=":", lw=0.9, alpha=0.7)
+ax.axvline(THRESHOLD, color="black", ls="--", lw=1.3, label=f"threshold {THRESHOLD}")
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel(r"posterior density $f(\theta \mid \mathcal{D})$")
+ax.set_title("Sequential Bayesian learning: prior to final posterior", fontsize=9)
+ax.legend(fontsize=6.5, loc="upper left")
+
+ax = axes[1]
+ax.plot(th, POST.pdf(th), color="#C44E52", lw=2, label=f"final Beta({A_FINAL:g},{B_FINAL:g})")
+mask = th > THRESHOLD
+ax.fill_between(th[mask], 0, POST.pdf(th[mask]), color="#C44E52", alpha=0.30,
+                label=fr"$P(\theta>0.8\mid\mathcal{{D}}) = {POST.sf(THRESHOLD):.4f}$")
+lo, hi = POST.ppf(0.025), POST.ppf(0.975)
+ax.axvspan(lo, hi, color="#4C72B0", alpha=0.12, label=f"95% CI [{lo:.4f}, {hi:.4f}]")
+ax.axvline(THRESHOLD, color="black", ls="--", lw=1.3, label=f"threshold {THRESHOLD}")
+ax.axvline(POST.mean(), color="#55A868", lw=1.4, label=f"mean {POST.mean():.4f}")
+ax.set_xlim(0.6, 1.0)
+ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density")
+ax.set_title("Final posterior, 95% credible interval and threshold mass", fontsize=9)
+ax.legend(fontsize=6.5, loc="upper left")
+
+plt.tight_layout()
+plt.savefig(os.path.join(RES, "B2_posterior_evolution.png"), bbox_inches="tight")
+plt.show()
+
+#%% code
+# --------------------------------------- estimate table (report version)
+est = seq_df[["stage", "cum_attempts", "cum_successes", "ML (s/n)",
+              "posterior mean", "MAP (mode)", "posterior sd"]].copy()
+print("CUMULATIVE POINT ESTIMATES AFTER EACH BATCH\n")
+print(est.to_string(index=False))
+est.to_csv(os.path.join(RES, "B2_point_estimates.csv"), index=False)
+with open(os.path.join(RES, "B2_point_estimates.md"), "w") as f:
+    f.write(est.to_markdown(index=False, floatfmt=".4f"))
+
+print("\nThe three estimators converge as data accumulates: the prior's pull is strongest after "
+      "batch 1 (10 attempts vs a prior worth ~3) and nearly negligible after batch 3 (100 "
+      "attempts). ML ignores the prior entirely; the posterior mean is pulled toward the prior "
+      "mean 0.4; MAP sits between them because the mode of a left-skewed posterior lies above "
+      "its mean.")
+print(f"\ngap |posterior mean - ML| : batch1 = "
+      f"{abs(est['posterior mean'][1]-est['ML (s/n)'][1]):.4f}, "
+      f"batch3 = {abs(est['posterior mean'][3]-est['ML (s/n)'][3]):.4f}")
+#%% md
+## B3. Quantify uncertainty and make a decision  *(3 marks)*
+
+### The three quantities, and why they are different
+
+**1. Posterior predictive probability of success on the next attempt.** We do not know $\theta$, so
+we average the Bernoulli success probability over the whole posterior rather than plugging in a point
+estimate:
+
+$$P(X_{n+1} = 1 \mid \mathcal{D}) = \int_0^1 \underbrace{P(X_{n+1}=1\mid\theta)}_{=\;\theta} f(\theta\mid\mathcal{D})\, d\theta
+= \mathbb{E}[\theta \mid \mathcal{D}] = \frac{\alpha_n}{\alpha_n+\beta_n}$$
+
+For the Beta–Bernoulli pair this integral happens to equal the posterior mean, which is why the two
+numbers coincide. They are conceptually distinct all the same: one is a probability about a future
+*observation*, the other a summary of a *parameter* distribution. Predictions about future data have
+to integrate over parameter uncertainty; the coincidence is a property of the linear expectation, and
+it disappears for any non-linear quantity (e.g. the probability that the next **two** attempts both
+succeed is $\mathbb{E}[\theta^2] > (\mathbb{E}[\theta])^2$ by Jensen's inequality — strictly larger
+than the plug-in answer).
+
+**2. A 95% equal-tailed credible interval.** The values $[\theta_{0.025},\ \theta_{0.975}]$ from the
+posterior quantile function, leaving 2.5% probability in each tail. Read directly: given the model,
+the prior and the data, there is a 95% posterior probability that $\theta$ lies in this interval.
+
+**3. $P(\theta > 0.8 \mid \mathcal{D})$.** The posterior *mass* above the threshold — the survival
+function $1 - F(0.8)$, i.e. the shaded area in the B2 figure. This is the quantity the deployment
+rule refers to.
+
+#%% code
+predictive = A_FINAL / (A_FINAL + B_FINAL)
+ci_lo, ci_hi = POST.ppf(0.025), POST.ppf(0.975)
+p_gt = POST.sf(THRESHOLD)
+
+print("USING ALL THREE BATCHES  (posterior "
+      f"Beta({A_FINAL:g}, {B_FINAL:g}), n = {TOTAL_N}, s = {TOTAL_S})\n")
+print(f"1. posterior predictive P(X_next = 1 | D) = {predictive:.6f}")
+print(f"     (= posterior mean {POST.mean():.6f}; ML plug-in would give "
+      f"{TOTAL_S/TOTAL_N:.6f})")
+print(f"2. 95% equal-tailed credible interval    = [{ci_lo:.6f}, {ci_hi:.6f}]  "
+      f"(width {ci_hi-ci_lo:.6f})")
+print(f"3. P(theta > {THRESHOLD} | D)                  = {p_gt:.6f}")
+
+# independent checks on each quantity ------------------------------------------------
+print("\n--- independent numerical checks ---")
+pred_int = integrate.quad(lambda t: t * POST.pdf(t), 0, 1)[0]
+print(f"predictive via numerical integral of theta*f(theta): {pred_int:.8f}  "
+      f"(closed form {predictive:.8f})")
+print(f"CDF check: F(ci_lo) = {POST.cdf(ci_lo):.6f} (want 0.025), "
+      f"F(ci_hi) = {POST.cdf(ci_hi):.6f} (want 0.975)")
+sf_int = integrate.quad(POST.pdf, THRESHOLD, 1)[0]
+print(f"P(theta>0.8) via numerical integral: {sf_int:.8f}  (scipy sf {p_gt:.8f})")
+print(f"1 - cdf(0.8) = {1 - POST.cdf(THRESHOLD):.8f}")
+
+#%% code
+# ------------------- Monte-Carlo verification of P(theta > 0.8 | D) with a stated seed
+rng_mc = np.random.default_rng(SEED)
+draws = rng_mc.beta(A_FINAL, B_FINAL, N_DRAWS)
+
+mc_p = float((draws > THRESHOLD).mean())
+mc_se = float(np.sqrt(mc_p * (1 - mc_p) / N_DRAWS))
+print(f"MONTE-CARLO VERIFICATION   (seed = {SEED}, draws = {N_DRAWS:,})\n")
+print(f"  analytic  P(theta > 0.8 | D) = {p_gt:.6f}")
+print(f"  simulated P(theta > 0.8 | D) = {mc_p:.6f}   (standard error {mc_se:.6f})")
+print(f"  |difference|                 = {abs(mc_p - p_gt):.6f}  "
+      f"= {abs(mc_p - p_gt)/mc_se:.2f} standard errors")
+print(f"\n  MC posterior mean = {draws.mean():.6f} vs analytic {POST.mean():.6f}")
+print(f"  MC 95% CI         = [{np.quantile(draws, 0.025):.6f}, "
+      f"{np.quantile(draws, 0.975):.6f}] vs analytic [{ci_lo:.6f}, {ci_hi:.6f}]")
+
+# convergence of the MC estimate, and the required minimum of 10,000 draws
+sizes = [1_000, 10_000, 50_000, 100_000, 200_000]
+conv = pd.DataFrame([{"draws": m, "MC estimate": draws[:m].mean() * 0 + (draws[:m] > THRESHOLD).mean(),
+                      "abs error vs analytic": abs((draws[:m] > THRESHOLD).mean() - p_gt)}
+                     for m in sizes])
+print("\n" + conv.to_string(index=False))
+conv.to_csv(os.path.join(RES, "B3_mc_convergence.csv"), index=False)
+
+fig, ax = plt.subplots(figsize=(5.4, 3.1))
+running = np.cumsum(draws > THRESHOLD) / np.arange(1, N_DRAWS + 1)
+ax.plot(np.arange(1, N_DRAWS + 1), running, lw=0.8, color="#4C72B0",
+        label="running MC estimate")
+ax.axhline(p_gt, color="black", ls="--", lw=1.3, label=f"analytic = {p_gt:.4f}")
+ax.axvline(10_000, color="#C44E52", ls=":", lw=1.2, label="10,000 draws (minimum)")
+ax.set_xscale("log"); ax.set_xlabel("number of posterior draws")
+ax.set_ylabel(r"$P(\theta > 0.8 \mid \mathcal{D})$")
+ax.set_ylim(p_gt - 0.08, p_gt + 0.08)
+ax.set_title(f"Monte-Carlo verification (seed {SEED})", fontsize=9)
+ax.legend(fontsize=7)
+plt.tight_layout()
+plt.savefig(os.path.join(RES, "B3_mc_verification.png"), bbox_inches="tight")
+plt.show()
+
+#%% code
+# ----------------------------------------------------- the deployment decision
+meets = p_gt >= DECISION_LEVEL
+print("=" * 66)
+print(f"DEPLOYMENT RULE:  require P(theta > {THRESHOLD} | D) >= {DECISION_LEVEL}")
+print("=" * 66)
+print(f"  observed             : P(theta > 0.8 | D) = {p_gt:.4f}")
+print(f"  required             : {DECISION_LEVEL}")
+print(f"  shortfall            : {DECISION_LEVEL - p_gt:.4f}")
+print(f"  DECISION             : {'MET -> deploy' if meets else 'NOT MET -> do not deploy yet'}")
+print(f"\n  for context: ML estimate = {TOTAL_S/TOTAL_N:.4f} and posterior mean = "
+      f"{POST.mean():.4f}, both ABOVE 0.8,")
+print(f"  yet the rule still fails, and the 95% CI lower bound is {ci_lo:.4f} < 0.8.")
+
+# How much more data would be needed, at the same observed success rate?
+print("\nHow many additional attempts at the SAME observed rate (0.85) would satisfy the rule?")
+rate = TOTAL_S / TOTAL_N
+for extra in [0, 50, 100, 200, 300, 400, 500, 700]:
+    s_ex = int(round(rate * extra))
+    aa, bb = A_FINAL + s_ex, B_FINAL + (extra - s_ex)
+    pv = stats.beta(aa, bb).sf(THRESHOLD)
+    flag = "  <-- rule satisfied" if pv >= DECISION_LEVEL else ""
+    print(f"  +{extra:4d} attempts (+{s_ex:3d} successes) -> Beta({aa:6.1f},{bb:5.1f})  "
+          f"P(theta>0.8) = {pv:.4f}{flag}")
+
+decision = {"P(theta>0.8|D)": float(p_gt), "required": DECISION_LEVEL,
+            "meets_rule": bool(meets), "posterior_mean": float(POST.mean()),
+            "ML": float(TOTAL_S / TOTAL_N), "CI": [float(ci_lo), float(ci_hi)],
+            "predictive_next": float(predictive),
+            "mc_estimate": mc_p, "mc_seed": SEED, "mc_draws": N_DRAWS}
+with open(os.path.join(RES, "B3_decision.json"), "w") as f:
+    json.dump(decision, f, indent=2)
+
+#%% code
+# Why a PDF value at 0.8 is NOT the probability -- demonstrated numerically.
+print("A DENSITY VALUE IS NOT A PROBABILITY\n")
+print(f"  f(0.8)                     = {POST.pdf(THRESHOLD):.6f}   <- a density; can exceed 1")
+print(f"  P(theta > 0.8 | D)         = {p_gt:.6f}   <- the required probability (an area)")
+print(f"  P(theta = 0.8 | D)         = 0 exactly    <- a point has zero probability")
+print(f"\n  f(0.8) integrates to a probability only over an interval, e.g.")
+for w in (0.01, 0.001):
+    exact_w = POST.cdf(THRESHOLD + w / 2) - POST.cdf(THRESHOLD - w / 2)
+    print(f"    P(0.8 +/- {w/2:.4f}) = {exact_w:.6f}   ~= f(0.8) * {w} = "
+          f"{POST.pdf(THRESHOLD)*w:.6f}")
+print(f"\n  Densities can even exceed 1: max of this posterior is "
+      f"{POST.pdf(np.linspace(0,1,10001)).max():.3f} at theta = "
+      f"{(A_FINAL-1)/(A_FINAL+B_FINAL-2):.4f}")
+
+#%% md
+### Does the evidence meet the deployment rule?
+
+**No.** The posterior probability $P(\theta > 0.8 \mid \mathcal{D})$ computed above falls short of
+the required $0.95$ (exact figures in the cell output and in `B3_decision.json`). The rule is not
+satisfied and the robot should not be deployed on this evidence.
+
+**Why a point estimate above 0.8 is not sufficient.** Both the maximum-likelihood estimate
+$85/100 = 0.85$ and the posterior mean lie *above* the threshold, yet the rule still fails. A point
+estimate is a single summary of the posterior and discards its width. With only 100 attempts the
+posterior still has a visible spread, and a substantial slice of it lies below $0.8$ — so a
+non-trivial probability remains that the true reliability is below the standard. The deployment rule
+is deliberately written about the *whole posterior distribution*, not its centre, because the cost of
+deploying an unreliable gripper is borne when $\theta$ turns out to be low, not when the average
+looks acceptable. The 95% credible interval makes the same point: its lower bound sits below $0.8$,
+so $\theta < 0.8$ has not been ruled out at that level. Passing the rule requires the posterior to be
+*concentrated* above the threshold, which needs more data (the table above shows roughly how many
+further attempts at the same observed success rate would be required).
+
+**Why a PDF value at 0.8 is not this probability.** $f(0.8)$ is a *density*: a limiting
+probability-per-unit-$\theta$, not a probability. It can be any non-negative number, including values
+above 1 (this posterior peaks above 10), so it cannot be compared to $0.95$ at all. The probability
+of any single point is exactly zero for a continuous parameter. The quantity the rule needs is the
+*area* under the density to the right of the threshold,
+$P(\theta > 0.8\mid\mathcal{D}) = \int_{0.8}^{1} f(\theta\mid\mathcal{D})\,d\theta = 1 - F(0.8)$,
+which is what `sf(0.8)` returns and what the Monte-Carlo draws confirm to within the reported
+standard error. The cell above verifies the relationship explicitly: $f(0.8)$ times a small width
+approximates the probability of that narrow interval, which is what a density means.
+
+## B4. Examine the role of the prior  *(2 marks)*
+
+Three priors, all in the same conjugate family, compared after Batch 1 alone (10 attempts) and after
+all three batches (100 attempts):
+
+| Prior | Interpretation | Prior mean | Prior "pseudo-attempts" $\alpha+\beta$ |
+|---|---|---|---|
+| $\mathrm{Beta}(2,3)$ | the assignment's mildly pessimistic prior | $0.400$ | 5 |
+| $\mathrm{Beta}(1,1)$ | uniform — flat over $(0,1)$, "no preference" | $0.500$ | 2 |
+| $\mathrm{Beta}(8,2)$ | optimistic — believes the gripper is already good | $0.800$ | 10 |
+
+#%% code
+PRIORS = [("Beta(2,3) [assignment]", 2.0, 3.0),
+          ("Beta(1,1) [uniform]",    1.0, 1.0),
+          ("Beta(8,2) [optimistic]", 8.0, 2.0)]
+
+rows = []
+for name, a0, b0 in PRIORS:
+    for stage, n_c, s_c in [("prior only", 0, 0),
+                            ("after batch 1", BATCHES[0]["n"], BATCHES[0]["s"]),
+                            ("after all batches", TOTAL_N, TOTAL_S)]:
+        aa, bb = a0 + s_c, b0 + (n_c - s_c)
+        d = stats.beta(aa, bb)
+        mode = (aa - 1) / (aa + bb - 2) if (aa > 1 and bb > 1) else np.nan
+        rows.append({"prior": name, "stage": stage,
+                     "alpha": aa, "beta": bb,
+                     "ML (s/n)": (s_c / n_c) if n_c else np.nan,
+                     "posterior mean": aa / (aa + bb),
+                     "MAP (mode)": mode,
+                     "P(theta > 0.8)": d.sf(THRESHOLD),
+                     "95% CI low": d.ppf(0.025), "95% CI high": d.ppf(0.975),
+                     "posterior sd": d.std(),
+                     "meets rule": d.sf(THRESHOLD) >= DECISION_LEVEL})
+
+sens = pd.DataFrame(rows)
+print("PRIOR SENSITIVITY\n")
+print(sens.to_string(index=False))
+sens.to_csv(os.path.join(RES, "B4_prior_sensitivity.csv"), index=False)
+
+focus = sens[sens.stage != "prior only"][
+    ["prior", "stage", "ML (s/n)", "posterior mean", "MAP (mode)",
+     "P(theta > 0.8)", "meets rule"]]
+with open(os.path.join(RES, "B4_prior_sensitivity.md"), "w") as f:
+    f.write(focus.to_markdown(index=False, floatfmt=".4f"))
+
+print("\n--- spread across the three priors ---")
+for stage in ["after batch 1", "after all batches"]:
+    s = sens[sens.stage == stage]
+    print(f"{stage:20s}: posterior mean range = "
+          f"{s['posterior mean'].min():.4f} to {s['posterior mean'].max():.4f} "
+          f"(spread {s['posterior mean'].max()-s['posterior mean'].min():.4f}); "
+          f"P(theta>0.8) range = {s['P(theta > 0.8)'].min():.4f} to "
+          f"{s['P(theta > 0.8)'].max():.4f}")
+
+#%% code
+# --------------------- ML vs MAP under a uniform prior
+print("ML AND MAP UNDER THE UNIFORM PRIOR Beta(1,1)\n")
+for stage, n_c, s_c in [("after batch 1", BATCHES[0]["n"], BATCHES[0]["s"]),
+                        ("after all batches", TOTAL_N, TOTAL_S)]:
+    aa, bb = 1.0 + s_c, 1.0 + (n_c - s_c)
+    mode = (aa - 1) / (aa + bb - 2)
+    ml = s_c / n_c
+    mean = aa / (aa + bb)
+    print(f"{stage:20s}  ML = {ml:.6f}   MAP = {mode:.6f}   "
+          f"identical: {np.isclose(ml, mode)}   posterior mean = {mean:.6f} (differs)")
+
+print("\nAlgebraically, with alpha = beta = 1 the posterior is Beta(1+s, 1+n-s), so")
+print("   MAP = (alpha-1)/(alpha+beta-2) = s/n = ML,")
+print("because a flat prior contributes no theta-dependence: maximising the posterior reduces to")
+print("maximising the likelihood. The posterior MEAN is (1+s)/(2+n) = Laplace smoothing, which is")
+print("NOT equal to s/n -- it is pulled toward 0.5 by the prior's two pseudo-attempts.")
+
+# Show the practical difference: an extreme dataset
+print("\nWhy the full Bayesian answer still differs from ML -- an extreme case (n=5, s=5):")
+n_x, s_x = 5, 5
+d_x = stats.beta(1 + s_x, 1 + n_x - s_x)
+print(f"   ML                     = {s_x/n_x:.4f}   -> claims the next attempt CANNOT fail")
+print(f"   MAP (uniform prior)    = {s_x/n_x:.4f}   -> same point estimate")
+print(f"   posterior predictive   = {d_x.mean():.4f}   -> admits failure is still possible")
+print(f"   95% CI                 = [{d_x.ppf(0.025):.4f}, {d_x.ppf(0.975):.4f}]  "
+      "-> ML reports no interval at all")
+print(f"   P(theta > 0.8)         = {d_x.sf(0.8):.4f}   -> ML cannot express this quantity")
+
+#%% code
+# --------------------- visualise prior sensitivity
+fig, axes = plt.subplots(1, 3, figsize=(12.5, 3.4))
+th = np.linspace(0, 1, 1200)
+pcolours = ["#4C72B0", "#55A868", "#C44E52"]
+
+for ax, (stage, n_c, s_c) in zip(axes, [("Priors only", 0, 0),
+                                        ("After batch 1 (n=10)", 10, 6),
+                                        ("After all batches (n=100)", TOTAL_N, TOTAL_S)]):
+    for (name, a0, b0), c in zip(PRIORS, pcolours):
+        aa, bb = a0 + s_c, b0 + (n_c - s_c)
+        ax.plot(th, stats.beta(aa, bb).pdf(th), color=c, lw=1.9, label=name)
+    if n_c:
+        ax.axvline(s_c / n_c, color="black", ls="-.", lw=1.1, label=f"ML = {s_c/n_c:.2f}")
+    ax.axvline(THRESHOLD, color="grey", ls="--", lw=1.2, label="0.8 threshold")
+    ax.set_title(stage, fontsize=9)
+    ax.set_xlabel(r"$\theta$"); ax.set_ylabel("density")
+    ax.legend(fontsize=6.5)
+    if n_c == TOTAL_N:
+        ax.set_xlim(0.6, 1.0)
+
+plt.tight_layout()
+plt.savefig(os.path.join(RES, "B4_prior_sensitivity.png"), bbox_inches="tight")
+plt.show()
+
+# threshold probability as a function of prior strength, at fixed data
+fig, ax = plt.subplots(figsize=(5.6, 3.1))
+for (name, a0, b0), c in zip(PRIORS, pcolours):
+    xs, ys = [], []
+    for n_c, s_c in [(0, 0), (10, 6), (30, 22), (100, 85)]:
+        xs.append(n_c)
+        ys.append(stats.beta(a0 + s_c, b0 + n_c - s_c).sf(THRESHOLD))
+    ax.plot(xs, ys, marker="o", color=c, lw=1.7, label=name)
+ax.axhline(DECISION_LEVEL, color="black", ls="--", lw=1.3, label="rule: 0.95")
+ax.set_xlabel("cumulative attempts observed")
+ax.set_ylabel(r"$P(\theta > 0.8 \mid \mathcal{D})$")
+ax.set_title("Prior influence shrinks as data accumulates", fontsize=9)
+ax.legend(fontsize=7)
+plt.tight_layout()
+plt.savefig(os.path.join(RES, "B4_prior_influence_vs_data.png"), bbox_inches="tight")
+plt.show()
+
+#%% md
+### Interpreting prior sensitivity
+
+**After Batch 1 the prior matters; after all batches it barely does.** With only 10 attempts the
+three priors are worth 5, 2 and 10 pseudo-attempts respectively — comparable to the data itself — so
+the posterior means are visibly spread and the optimistic $\mathrm{Beta}(8,2)$ gives a much larger
+$P(\theta > 0.8)$ than the other two. After 100 attempts the data term dominates every prior: the
+posterior means collapse into a narrow band, all three sit close to the ML value $0.85$, and the
+exact numbers are in `B4_prior_sensitivity.csv`. This is the usual asymptotic picture — the
+likelihood accumulates with $n$ while a fixed prior does not — and it is the practical reason to
+report prior sensitivity rather than to argue about the "correct" prior: if a conclusion flips
+between reasonable priors, the data are too weak to support it.
+
+The threshold probability is more prior-sensitive than the mean, because it depends on the posterior
+*tail* rather than its centre. That is worth noting for the deployment rule specifically: a decision
+stated as a tail probability is more fragile under prior choice than one stated as a point estimate.
+Whether the rule is met under each prior is recorded in the `meets rule` column.
+
+**ML and MAP under a uniform prior.** With $\mathrm{Beta}(1,1)$ the prior density is constant, so it
+contributes nothing that depends on $\theta$:
+$f(\theta\mid\mathcal{D}) \propto P(\mathcal{D}\mid\theta) \cdot 1$. Maximising the posterior is then
+literally maximising the likelihood, and the algebra confirms it:
+$\hat\theta_{\mathrm{MAP}} = \frac{(1+s)-1}{(1+s)+(1+n-s)-2} = \frac{s}{n} = \hat\theta_{\mathrm{ML}}$.
+The cell above verifies this equality numerically at both stages.
+
+**Why that does not make the Bayesian answer identical to ML.** The coincidence is only about the
+*single point* where the density is highest — MAP and ML pick the same mode. Everything else differs:
+
+* The **posterior mean** under $\mathrm{Beta}(1,1)$ is $(1+s)/(2+n)$, i.e. Laplace-smoothed, not
+  $s/n$. It is the posterior predictive probability for the next attempt, so even the flat-prior
+  Bayesian *prediction* differs from the ML plug-in.
+* ML returns a number; the posterior returns a **distribution**, from which credible intervals and
+  $P(\theta > 0.8\mid\mathcal{D})$ follow. ML has no mechanism to produce the quantity the deployment
+  rule asks for — a frequentist confidence interval is a different object with a different
+  interpretation.
+* The gap matters most exactly where decisions are riskiest. The extreme example above ($5$ successes
+  in $5$ attempts) makes it concrete: ML and MAP both say $\hat\theta = 1.0$, implying the next
+  attempt cannot possibly fail, while the flat-prior posterior predictive gives about $0.86$ and
+  assigns real probability to failure. Optimising a point and carrying a distribution are different
+  operations; only the second one propagates uncertainty into the decision.
+
+#%% code
+# ------------------------------------------------------------------ manifest
+manifest = {
+    "part": "B",
+    "student": {"name": "Satria Pamungkas", "id": "21522611"},
+    "model": {"likelihood": "Bernoulli(theta)", "prior": "Beta(2,3)",
+              "conjugate_update": "Beta(alpha+s, beta+n-s)"},
+    "data_batches": BATCHES, "pooled": {"n": TOTAL_N, "s": TOTAL_S},
+    "final_posterior": {"alpha": A_FINAL, "beta": B_FINAL,
+                        "mean": float(POST.mean()), "sd": float(POST.std()),
+                        "MAP": float((A_FINAL-1)/(A_FINAL+B_FINAL-2))},
+    "B3": decision,
+    "seeds": {"numpy_default_rng": SEED, "posterior_draws": N_DRAWS},
+    "priors_compared": [{"name": n, "alpha": a, "beta": b} for n, a, b in PRIORS],
+    "environment": {"python": sys.version.split()[0], "numpy": np.__version__,
+                    "scipy": __import__("scipy").__version__,
+                    "platform": platform.platform()},
+    "files": sorted(os.listdir(RES)),
+}
+with open(os.path.join(RES, "B_manifest.json"), "w") as f:
+    json.dump(manifest, f, indent=2)
+
+print("KEY NUMBERS FOR THE REPORT")
+print("=" * 50)
+print(f"final posterior          Beta({A_FINAL:g}, {B_FINAL:g})")
+print(f"posterior mean           {POST.mean():.4f}")
+print(f"MAP                      {(A_FINAL-1)/(A_FINAL+B_FINAL-2):.4f}")
+print(f"ML                       {TOTAL_S/TOTAL_N:.4f}")
+print(f"predictive next success  {predictive:.4f}")
+print(f"95% credible interval    [{ci_lo:.4f}, {ci_hi:.4f}]")
+print(f"P(theta > 0.8 | D)       {p_gt:.4f}   (MC {mc_p:.4f})")
+print(f"deployment rule met?     {'YES' if meets else 'NO'}")
+print("\nPart B complete. Artefacts written to:", RES)
+for fn in sorted(os.listdir(RES)):
+    print("  ", fn)

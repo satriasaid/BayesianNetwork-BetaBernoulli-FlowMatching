@@ -1,0 +1,101 @@
+{
+  "part": "A",
+  "student": {
+    "name": "Satria Pamungkas",
+    "id": "21522611"
+  },
+  "model": {
+    "variables": [
+      "H",
+      "F",
+      "D",
+      "S",
+      "W"
+    ],
+    "edges": [
+      "H->D",
+      "F->D",
+      "D->S",
+      "D->W",
+      "H->W"
+    ],
+    "P(H=1)": 0.3,
+    "P(F=1)": 0.08,
+    "P(D=1|H,F)": [
+      [
+        0.05,
+        0.8
+      ],
+      [
+        0.4,
+        0.95
+      ]
+    ],
+    "P(S=1|D)": [
+      0.1,
+      0.9
+    ],
+    "P(W=1|H,D)": [
+      [
+        0.02,
+        0.7
+      ],
+      [
+        0.1,
+        0.9
+      ]
+    ]
+  },
+  "exact_values": {
+    "q1": 0.2315035799522673,
+    "q2": 0.2932938311280725,
+    "q3": 0.16867469879518074
+  },
+  "P_evidence": {
+    "q1": 0.26816,
+    "q2": 0.159316,
+    "q3": 0.10956000000000002
+  },
+  "experiment": {
+    "sample_sizes": [
+      1000,
+      10000,
+      100000
+    ],
+    "seeds": [
+      11,
+      22,
+      33,
+      44,
+      55
+    ],
+    "methods": [
+      "forward+rejection",
+      "likelihood_weighting"
+    ],
+    "rng": "numpy.random.default_rng (PCG64)"
+  },
+  "environment": {
+    "python": "3.10.12",
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35"
+  },
+  "files": [
+    "A1_exact_reference_values.csv",
+    "A1_joint_enumeration_32_states.csv",
+    "A2_rejection_per_run.csv",
+    "A3_likelihood_weighting_per_run.csv",
+    "A3_weight_distribution.png",
+    "A4_all_runs_combined.csv",
+    "A4_convergence_q2.png",
+    "A4_error_and_cost.png",
+    "A4_evidence_sequence.csv",
+    "A4_report_table.csv",
+    "A4_report_table.md",
+    "A4_summary_table.csv",
+    "A4_timing.csv",
+    "A4_variance_check_400seeds.csv",
+    "A_manifest.json"
+  ]
+}

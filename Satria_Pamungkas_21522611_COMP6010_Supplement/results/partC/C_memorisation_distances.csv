@@ -1,0 +1,3 @@
+set,n,mean NN distance,min,5th pct,max
+"generated (epoch 60, 96 samples)",96,16.615944,10.157864,11.675763,21.40522
+real HELD-OUT drawings (never trained on),200,15.689649,8.799432,10.719836,23.682932
