@@ -1,0 +1,99 @@
+{
+  "part": "B",
+  "student": {
+    "name": "Satria Pamungkas",
+    "id": "21522611"
+  },
+  "model": {
+    "likelihood": "Bernoulli(theta)",
+    "prior": "Beta(2,3)",
+    "conjugate_update": "Beta(alpha+s, beta+n-s)"
+  },
+  "data_batches": [
+    {
+      "batch": 1,
+      "n": 10,
+      "s": 6,
+      "f": 4
+    },
+    {
+      "batch": 2,
+      "n": 20,
+      "s": 16,
+      "f": 4
+    },
+    {
+      "batch": 3,
+      "n": 70,
+      "s": 63,
+      "f": 7
+    }
+  ],
+  "pooled": {
+    "n": 100,
+    "s": 85
+  },
+  "final_posterior": {
+    "alpha": 87.0,
+    "beta": 18.0,
+    "mean": 0.8285714285714286,
+    "sd": 0.036606115625584815,
+    "MAP": 0.8349514563106796
+  },
+  "B3": {
+    "P(theta>0.8|D)": 0.7882666594109131,
+    "required": 0.95,
+    "meets_rule": false,
+    "posterior_mean": 0.8285714285714286,
+    "ML": 0.85,
+    "CI": [
+      0.751231581358272,
+      0.8940758028229896
+    ],
+    "predictive_next": 0.8285714285714286,
+    "mc_estimate": 0.78688,
+    "mc_seed": 20260910,
+    "mc_draws": 200000
+  },
+  "seeds": {
+    "numpy_default_rng": 20260910,
+    "posterior_draws": 200000
+  },
+  "priors_compared": [
+    {
+      "name": "Beta(2,3) [assignment]",
+      "alpha": 2.0,
+      "beta": 3.0
+    },
+    {
+      "name": "Beta(1,1) [uniform]",
+      "alpha": 1.0,
+      "beta": 1.0
+    },
+    {
+      "name": "Beta(8,2) [optimistic]",
+      "alpha": 8.0,
+      "beta": 2.0
+    }
+  ],
+  "environment": {
+    "python": "3.10.12",
+    "numpy": "1.26.4",
+    "scipy": "1.13.0",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35"
+  },
+  "files": [
+    "B2_point_estimates.csv",
+    "B2_point_estimates.md",
+    "B2_posterior_evolution.png",
+    "B2_sequential_updates.csv",
+    "B3_decision.json",
+    "B3_mc_convergence.csv",
+    "B3_mc_verification.png",
+    "B4_prior_influence_vs_data.png",
+    "B4_prior_sensitivity.csv",
+    "B4_prior_sensitivity.md",
+    "B4_prior_sensitivity.png",
+    "B_manifest.json"
+  ]
+}

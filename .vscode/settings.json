@@ -1,0 +1,5 @@
+{
+    "workbench.preferredHighContrastColorTheme": "Visual Studio Light",
+    "workbench.preferredDarkColorTheme": "Light Modern",
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+}
